@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # UK Banking Adverse News — Configuration
 # =============================================================================
 
@@ -11,6 +11,7 @@ search_grounding: true      # Use Google Search Grounding (no file upload needed
 lookback_days: 7            # Rolling 7-day window
 batch_size: 30              # Banks per Gemini call (131 banks → 5 batches max)
 max_retries: 3              # Retries per model before cascade to next
-retry_delay_seconds: 10     # Base delay (exponential backoff applied)
+retry_delay_seconds: 60     # Base delay for 429/5xx (backoff: 60s → 120s → 240s)
+inter_batch_delay_seconds: 65  # Pause between batches to stay within RPM quota
 
 output_dir: "briefings"     # Relative to repo root

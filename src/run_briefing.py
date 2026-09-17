@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -87,7 +88,8 @@ def main() -> None:
     batch_size = cfg.get("batch_size", 30)
     lookback_days = cfg.get("lookback_days", 7)
     max_retries = cfg.get("max_retries", 3)
-    retry_delay = cfg.get("retry_delay_seconds", 10)
+    retry_delay = cfg.get("retry_delay_seconds", 60)
+    inter_batch_delay = cfg.get("inter_batch_delay_seconds", 65)
     output_dir = REPO_ROOT / cfg.get("output_dir", "briefings")
 
     # ---------------------------------------------------------- reference date
@@ -110,6 +112,7 @@ def main() -> None:
     batches = split_into_batches(banks, batch_size)
     total_batches = len(batches)
     logger.info(f"Split into {total_batches} batches of up to {batch_size} banks each.")
+    logger.info(f"Inter-batch delay: {inter_batch_delay}s | Retry base delay: {retry_delay}s")
 
     # ---------------------------------------------------------- per-batch call
     batch_responses: list[str] = []
@@ -146,6 +149,11 @@ def main() -> None:
         except RuntimeError as e:
             logger.error(f"Batch {i} failed permanently: {e}")
             batch_responses.append(f"[ERROR — batch {i} failed: {e}]")
+
+        # Pause between batches to stay within Gemini RPM quota (skip after last batch)
+        if i < total_batches:
+            logger.info(f"Waiting {inter_batch_delay}s before next batch (rate limit protection)...")
+            time.sleep(inter_batch_delay)
 
     # --------------------------------------------------------- format & save
     briefing_md = format_briefing(
