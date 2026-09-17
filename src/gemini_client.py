@@ -2,10 +2,9 @@
 gemini_client.py
 ================
 Gemini API client with:
-- 3-level model cascade: gemini-3.7-flash → gemini-3.6-flash → gemini-3.5-flash
+- 3-level model cascade: gemini-3.7-flash -> gemini-3.6-flash -> gemini-3.5-flash
 - model_callback triggered on each failure before cascading
 - Exponential backoff retry within each model
-- Google Search Grounding enabled
 """
 
 import logging
@@ -80,7 +79,7 @@ def call_with_cascade(
     client = genai.Client(api_key=api_key)
 
     config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.0,  # Make it deterministic
     )
 
     for model_name in MODEL_CASCADE:
