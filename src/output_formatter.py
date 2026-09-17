@@ -11,11 +11,11 @@ from typing import List
 
 
 PILLAR_ORDER = [
-    ("⚖️ Pillar 1 — Enforcement & Regulatory Action",   r"##\s*⚖️\s*Pillar 1[^\n]*"),
-    ("🔍 Pillar 2 — Financial Crime & Integrity",        r"##\s*🔍\s*Pillar 2[^\n]*"),
-    ("👤 Pillar 3 — Key Person & Leadership Risk",       r"##\s*👤\s*Pillar 3[^\n]*"),
-    ("⚙️ Pillar 4 — Operational & Security Risk",        r"##\s*⚙️\s*Pillar 4[^\n]*"),
-    ("💰 Pillar 5 — Financial Health & Stability",       r"##\s*💰\s*Pillar 5[^\n]*"),
+    ("⚖️ Pillar 1 — Enforcement & Regulatory Action",   r"#{1,4}\s*(?:⚖️)?\s*Pillar 1[^\n]*"),
+    ("🔍 Pillar 2 — Financial Crime & Integrity",        r"#{1,4}\s*(?:🔍)?\s*Pillar 2[^\n]*"),
+    ("👤 Pillar 3 — Key Person & Leadership Risk",       r"#{1,4}\s*(?:👤)?\s*Pillar 3[^\n]*"),
+    ("⚙️ Pillar 4 — Operational & Security Risk",        r"#{1,4}\s*(?:⚙️)?\s*Pillar 4[^\n]*"),
+    ("💰 Pillar 5 — Financial Health & Stability",       r"#{1,4}\s*(?:💰)?\s*Pillar 5[^\n]*"),
 ]
 
 
@@ -24,7 +24,7 @@ def extract_pillar_content(text: str, header_pattern: str) -> str:
     Extract the bullet content under a pillar heading from a batch response.
     Returns the content between this pillar heading and the next ## heading.
     """
-    pattern = rf"({header_pattern})(.*?)(?=\n##|\Z)"
+    pattern = rf"({header_pattern})(.*?)(?=\n#|\Z)"
     match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
     if match:
         return match.group(2).strip()

@@ -166,11 +166,18 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{reference_date.isoformat()}.md"
+    raw_output_file = output_dir / f"{reference_date.isoformat()}_raw.md"
 
+    # Save final formatted briefing
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(briefing_md)
 
+    # Save raw batch outputs for debugging
+    with open(raw_output_file, "w", encoding="utf-8") as f:
+        f.write("\n\n=== BATCH SEPARATOR ===\n\n".join(batch_responses))
+
     logger.info(f"Briefing saved to: {output_file}")
+    logger.info(f"Raw responses saved to: {raw_output_file}")
 
     if args.dry_run:
         print(f"\n[DRY RUN] Output would be saved to: {output_file}")

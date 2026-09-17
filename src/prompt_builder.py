@@ -1,4 +1,4 @@
-﻿"""
+"""
 prompt_builder.py
 =================
 Builds the Gemini prompt for each batch of banks,
@@ -25,10 +25,9 @@ INSTITUTIONS TO SCREEN:
 
 === TASK INSTRUCTIONS ===
 
-1. Use Google Search to find ALL adverse news published in the past 7 days \
-for EACH institution listed above.
+1. You MUST use the Google Search tool. Execute individual or combined search queries for the institutions listed above (e.g., "[Bank Name] FCA fine", "[Bank Name] outage", "[Bank Name] scandal"). Search for material adverse news published in the past 7 days.
 
-2. STRICT FILTER — Exclude ALL of the following:
+2. EXCLUSION FILTER — Do NOT include:
    - Routine earnings/results announcements
    - Product launches or new service announcements
    - Positive ESG or sustainability news
@@ -68,8 +67,7 @@ mass layoffs (>15% workforce).
    Acceptable sources: FCA.org.uk, BoE.co.uk, PRA, Reuters, Financial Times, \
 Bloomberg, Investment Week, Morningstar, Hansard, Companies House.
 
-5. If NO adverse news is found for an institution within the 7-day window: \
-OMIT that institution entirely from your response.
+5. Only include findings that meet the adverse criteria. If no material adverse news is found for a specific institution, do not list it.
 
 === FORMATTING RULES ===
 
