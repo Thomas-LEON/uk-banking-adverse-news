@@ -1,4 +1,4 @@
-﻿name: 🇬🇧 UK Banks Adverse News Briefing
+name: 🇬🇧 UK Banks Adverse News Briefing
 
 on:
   schedule:
@@ -33,7 +33,9 @@ jobs:
       - name: Run Adverse News Briefing
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          DATE_OVERRIDE: ${{ inputs.date_override }}
+          SILOBREAKER_API_KEY: ${{ secrets.SILOBREAKER_API_KEY }}
+          SILOBREAKER_SHARED_KEY: ${{ secrets.SILOBREAKER_SHARED_KEY }}
+          DATE_OVERRIDE: ${{ github.event.inputs.date_override }}
         run: python src/run_briefing.py
 
       - name: Commit and push briefing to main

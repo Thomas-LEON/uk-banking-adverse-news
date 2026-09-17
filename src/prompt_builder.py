@@ -25,7 +25,7 @@ INSTITUTIONS TO SCREEN:
 
 === TASK INSTRUCTIONS ===
 
-1. You MUST use the Google Search tool. Execute individual or combined search queries for the institutions listed above (e.g., "[Bank Name] FCA fine", "[Bank Name] outage", "[Bank Name] scandal"). Search for material adverse news published in the past 7 days.
+1. You are provided with a list of recent news articles in the section below. Read THESE SPECIFIC ARTICLES and extract any material adverse news regarding the listed institutions.
 
 2. EXCLUSION FILTER — Do NOT include:
    - Routine earnings/results announcements
@@ -63,11 +63,13 @@ mass layoffs (>15% workforce).
 
 4. MANDATORY SOURCE LINKS:
    Each adverse finding MUST include a Markdown hyperlink to the primary source.
-   Format: [Source description](https://full-url)
-   Acceptable sources: FCA.org.uk, BoE.co.uk, PRA, Reuters, Financial Times, \
-Bloomberg, Investment Week, Morningstar, Hansard, Companies House.
+   Use the EXACT URL provided in the article metadata below.
+   Format: [Source Name](URL)
 
 5. Only include findings that meet the adverse criteria. If no material adverse news is found for a specific institution, do not list it.
+
+=== PROVIDED NEWS ARTICLES ===
+{articles_text}
 
 === FORMATTING RULES ===
 
@@ -107,6 +109,7 @@ def build_prompt(
     banks: List[str],
     batch_num: int,
     total_batches: int,
+    articles_text: str,
     lookback_days: int = 7,
     reference_date: date = None,
 ) -> str:
@@ -117,6 +120,7 @@ def build_prompt(
         banks: List of bank names in this batch.
         batch_num: Current batch number (1-indexed).
         total_batches: Total number of batches.
+        articles_text: The formatted text of articles retrieved from Silobreaker.
         lookback_days: Number of days to look back from reference_date.
         reference_date: The end date of the analysis window (defaults to today).
 
@@ -137,6 +141,7 @@ def build_prompt(
         batch_num=batch_num,
         total_batches=total_batches,
         bank_list=bank_list_str,
+        articles_text=articles_text,
     )
 
     return f"{SYSTEM_ROLE}\n\n{task}"

@@ -7,7 +7,7 @@ models:
   fallback1: "gemini-3.6-flash"
   fallback2: "gemini-3.5-flash"
 
-search_grounding: true      # Use Google Search Grounding (no file upload needed)
+silobreaker_risk_query: "(fine OR penalty OR fraud OR lawsuit OR breach OR outage OR downgrade OR investigation OR sanctions OR laundering OR FCA OR PRA OR OFSI)"
 lookback_days: 7            # Rolling 7-day window
 batch_size: 30              # Banks per Gemini call (131 banks → 5 batches max)
 max_retries: 3              # Retries per model before cascade to next

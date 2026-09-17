@@ -29,9 +29,13 @@ import yaml
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).parent))
 
-from gemini_client import call_with_cascade
+from datetime import date, timedelta
+from pathlib import Path
+
 from prompt_builder import build_prompt, split_into_batches
 from output_formatter import format_briefing
+from gemini_client import call_with_cascade
+import silobreaker_client
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -102,11 +106,22 @@ def main() -> None:
     logger.info(f"Reference date: {reference_date}")
     logger.info(f"Banks to screen: {len(banks)}")
 
+    sb_risk_query = cfg.get("silobreaker_risk_query", "")
+
     # ----------------------------------------------------------- API key check
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key and not args.dry_run:
-        logger.error("GEMINI_API_KEY environment variable is not set.")
-        sys.exit(1)
+    sb_api_key = os.environ.get("SILOBREAKER_API_KEY", "")
+    sb_shared_key = os.environ.get("SILOBREAKER_SHARED_KEY", "")
+    
+    if not args.dry_run:
+        missing_keys = []
+        if not api_key: missing_keys.append("GEMINI_API_KEY")
+        if not sb_api_key: missing_keys.append("SILOBREAKER_API_KEY")
+        if not sb_shared_key: missing_keys.append("SILOBREAKER_SHARED_KEY")
+        
+        if missing_keys:
+            logger.error(f"Missing environment variables: {', '.join(missing_keys)}")
+            sys.exit(1)
 
     # --------------------------------------------------------------- batching
     batches = split_into_batches(banks, batch_size)
@@ -114,15 +129,42 @@ def main() -> None:
     logger.info(f"Split into {total_batches} batches of up to {batch_size} banks each.")
     logger.info(f"Inter-batch delay: {inter_batch_delay}s | Retry base delay: {retry_delay}s")
 
+    # Dates for Silobreaker
+    to_date_str = reference_date.strftime("%Y-%m-%d")
+    from_date_str = (reference_date - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
     # ---------------------------------------------------------- per-batch call
     batch_responses: list[str] = []
     model_used = cfg["models"]["primary"]  # will be updated to actual model used
 
     for i, batch in enumerate(batches, start=1):
+        logger.info(f"Processing batch {i}/{total_batches} ({len(batch)} banks)...")
+        
+        # 1. Fetch from Silobreaker
+        if args.dry_run:
+            articles_text = "[DRY RUN — Silobreaker articles would appear here]"
+        else:
+            raw_articles = silobreaker_client.fetch_adverse_news(
+                api_key=sb_api_key,
+                shared_key=sb_shared_key,
+                banks=batch,
+                risk_keywords=sb_risk_query,
+                from_date=from_date_str,
+                to_date=to_date_str
+            )
+            articles_text = silobreaker_client.format_articles_for_prompt(raw_articles)
+            
+            if not raw_articles:
+                logger.info(f"Batch {i} skipped: No adverse news found in Silobreaker.")
+                batch_responses.append(f"> ✅ No adverse news found for batch {i}.")
+                continue
+
+        # 2. Build Prompt
         prompt = build_prompt(
             banks=batch,
             batch_num=i,
             total_batches=total_batches,
+            articles_text=articles_text,
             lookback_days=lookback_days,
             reference_date=reference_date,
         )
@@ -135,7 +177,7 @@ def main() -> None:
             batch_responses.append(f"[DRY RUN — no API call for batch {i}]")
             continue
 
-        logger.info(f"Processing batch {i}/{total_batches} ({len(batch)} banks)...")
+        # 3. Call Gemini
         try:
             response_text, used_model = call_with_cascade(
                 prompt=prompt,
