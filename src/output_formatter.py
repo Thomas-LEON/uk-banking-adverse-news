@@ -99,7 +99,7 @@ FOOTER = """
 universe during the reference period.*
 
 *This briefing was generated automatically via the [uk-banking-adverse-news](https://github.com/Thomas-LEON/uk-banking-adverse-news) \
-pipeline using Gemini API with Google Search Grounding.*
+pipeline using Gemini API and Silobreaker Intelligence.*
 """
 
 
