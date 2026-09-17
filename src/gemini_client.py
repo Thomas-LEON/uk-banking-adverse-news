@@ -14,7 +14,7 @@ from typing import Optional
 
 from google import genai
 from google.genai import types
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
+from google.genai import errors as genai_errors
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,11 @@ MODEL_CASCADE = [
     "gemini-3.5-flash",
 ]
 
-TRANSIENT_ERRORS = (ResourceExhausted, ServiceUnavailable, DeadlineExceeded)
+# Transient errors that warrant retry + cascade (rate limits, server errors)
+TRANSIENT_ERRORS = (
+    genai_errors.ServerError,   # 5xx — service unavailable, overloaded
+    genai_errors.ClientError,   # 429 — quota / rate limit
+)
 
 
 def model_callback(attempted_model: str, error: Exception, attempt: int) -> Optional[str]:
