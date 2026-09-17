@@ -1,0 +1,52 @@
+﻿name: 🇬🇧 UK Banks Adverse News Briefing
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # Every Monday at 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: "Reference date override (YYYY-MM-DD). Leave empty for today."
+        required: false
+        default: ""
+
+jobs:
+  generate-briefing:
+    name: Generate Adverse News Briefing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Required to commit briefing file to main
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Adverse News Briefing
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DATE_OVERRIDE: ${{ inputs.date_override }}
+        run: python src/run_briefing.py
+
+      - name: Commit and push briefing to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add briefings/
+          # Only commit if there are staged changes
+          if git diff --staged --quiet; then
+            echo "No new briefing to commit (already up to date)."
+          else
+            DATE_LABEL=$(date -u +"%Y-%m-%d")
+            git commit -m "briefing: ${DATE_LABEL} UK Banks Adverse News"
+            git push
+            echo "Briefing committed and pushed successfully."
+          fi
