@@ -1,4 +1,4 @@
-﻿"""
+"""
 output_formatter.py
 ===================
 Merges batch responses from Gemini into a single structured Markdown briefing.
@@ -98,7 +98,7 @@ FOOTER = """
 *No adverse news was identified for the remaining institutions in the monitoring \
 universe during the reference period.*
 
-*This briefing was generated automatically via the [uk-banking-adverse-news](https://github.com) \
+*This briefing was generated automatically via the [uk-banking-adverse-news](https://github.com/Thomas-LEON/uk-banking-adverse-news) \
 pipeline using Gemini API with Google Search Grounding.*
 """
 
