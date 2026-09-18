@@ -6,7 +6,7 @@ Fetches adverse news from a curated list of official and press RSS feeds.
 Strategy:
 - Parse RSS/Atom feeds with feedparser (works on all gov/regulator sites)
 - For non-RSS press sites, attempt HTML scraping with requests + BeautifulSoup
-- Filter articles by bank name match (case-insensitive)
+- Filter articles by bank name match (smart token-based, case-insensitive)
 - Silently skip any source that blocks access (403, timeout, etc.)
 - Returns only articles published within the lookback window
 """
@@ -24,7 +24,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Browser-like headers to reduce chance of being blocked on press sites
+# Browser-like headers to reduce chance of being blocked
 # ---------------------------------------------------------------------------
 HEADERS = {
     "User-Agent": (
@@ -37,24 +37,35 @@ HEADERS = {
 }
 
 # ---------------------------------------------------------------------------
-# Source registry
+# Stop-words to strip from bank names before matching
+# (so "Barclays PLC" matches on "barclays" not "plc")
+# ---------------------------------------------------------------------------
+BANK_NAME_STOPWORDS = {
+    "bank", "plc", "ltd", "limited", "group", "uk", "holdings",
+    "building", "society", "services", "financial", "insurance",
+    "savings", "trust", "international", "co", "the", "of", "and",
+    "asset", "management", "capital", "investments", "fund",
+}
+
+# ---------------------------------------------------------------------------
+# Source registry — expanded with UK-focused adverse news sources
 # Each entry: {"name": str, "url": str, "type": "rss" | "html"}
 # ---------------------------------------------------------------------------
 SOURCES = [
-    # --- Official Regulators (reliable RSS/Atom) ---
+    # ── Official UK Regulators ───────────────────────────────────────────────
     {
-        "name": "FCA Enforcement",
+        "name": "FCA",
         "url": "https://www.fca.org.uk/news/rss.xml",
         "type": "rss",
     },
     {
-        "name": "Bank of England News",
+        "name": "Bank of England",
         "url": "https://www.bankofengland.co.uk/rss/news",
         "type": "rss",
     },
     {
         "name": "Bank of England PRA",
-        "url": "https://www.bankofengland.co.uk/rss/prudential-regulation",
+        "url": "https://www.bankofengland.co.uk/prudential-regulation/publication/rss",
         "type": "rss",
     },
     {
@@ -63,19 +74,9 @@ SOURCES = [
         "type": "rss",
     },
     {
-        "name": "SEC Press Releases",
-        "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=&dateb=&owner=include&count=40&search_text=&action=getcompany",
+        "name": "OFSI",
+        "url": "https://www.gov.uk/government/organisations/office-of-financial-sanctions-implementation.atom",
         "type": "rss",
-    },
-    {
-        "name": "SEC Press Releases RSS",
-        "url": "https://www.sec.gov/news/pressreleases.rss",
-        "type": "rss",
-    },
-    {
-        "name": "NYDFS Press Releases",
-        "url": "https://www.dfs.ny.gov/reports_and_publications/press_releases",
-        "type": "html",
     },
     {
         "name": "National Crime Agency",
@@ -83,32 +84,89 @@ SOURCES = [
         "type": "rss",
     },
     {
-        "name": "UK Judiciary Judgments",
-        "url": "https://www.judiciary.gov.uk/feed/",
+        "name": "UK Judiciary",
+        "url": "https://www.judiciary.gov.uk/judgments/feed/",
         "type": "rss",
     },
-    # --- Financial Press (attempt HTML scraping — may be blocked) ---
+    {
+        "name": "SEC Press Releases",
+        "url": "https://www.sec.gov/news/pressreleases.rss",
+        "type": "rss",
+    },
+    # ── UK Financial Press ───────────────────────────────────────────────────
+    {
+        "name": "City A.M.",
+        "url": "https://www.cityam.com/feed/",
+        "type": "rss",
+    },
+    {
+        "name": "The Guardian - Business",
+        "url": "https://www.theguardian.com/uk/business/rss",
+        "type": "rss",
+    },
+    {
+        "name": "BBC News - Business",
+        "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "type": "rss",
+    },
+    {
+        "name": "This Is Money",
+        "url": "https://www.thisismoney.co.uk/money/index.rss",
+        "type": "rss",
+    },
+    {
+        "name": "Finextra",
+        "url": "https://www.finextra.com/rss/headlines.xml",
+        "type": "rss",
+    },
     {
         "name": "Investment Week",
-        "url": "https://www.investmentweek.co.uk/feed",
+        "url": "https://www.investmentweek.co.uk/rss",
         "type": "rss",
     },
     {
-        "name": "Financial Times",
-        "url": "https://www.ft.com/rss/home/uk",
+        "name": "Proactive Investors UK",
+        "url": "https://www.proactiveinvestors.co.uk/rss/news",
         "type": "rss",
     },
     {
         "name": "Reuters Finance",
-        "url": "https://feeds.reuters.com/reuters/businessNews",
+        "url": "https://feeds.reuters.com/reuters/financialsNews",
         "type": "rss",
     },
     {
-        "name": "London Stock Exchange News",
-        "url": "https://www.londonstockexchange.com/news",
+        "name": "Sky News Business",
+        "url": "https://feeds.skynews.com/feeds/rss/business.xml",
+        "type": "rss",
+    },
+    {
+        "name": "Yahoo Finance UK",
+        "url": "https://finance.yahoo.com/rss/topstories",
+        "type": "rss",
+    },
+    {
+        "name": "Cybersecurity News",
+        "url": "https://cybersecuritynews.com/feed/",
+        "type": "rss",
+    },
+    {
+        "name": "Compliance Week",
+        "url": "https://www.complianceweek.com/rss/news",
+        "type": "rss",
+    },
+    {
+        "name": "Global Banking & Finance Review",
+        "url": "https://www.globalbankingandfinance.com/feed/",
+        "type": "rss",
+    },
+    # ── HTML scraping fallbacks ──────────────────────────────────────────────
+    {
+        "name": "NYDFS Press Releases",
+        "url": "https://www.dfs.ny.gov/reports_and_publications/press_releases",
         "type": "html",
     },
 ]
+
 
 # ---------------------------------------------------------------------------
 # Core logic
@@ -137,14 +195,14 @@ def _fetch_rss(source: dict, cutoff: datetime) -> List[Dict]:
 
         for entry in feed.entries:
             pub_date = _parse_date(entry)
+            # If no date found, include anyway (let Gemini filter by content)
             if pub_date and pub_date < cutoff:
-                continue  # Too old
+                continue
 
             title = entry.get("title", "").strip()
             link = entry.get("link", "").strip()
             summary = entry.get("summary", entry.get("description", "")).strip()
-            # Strip HTML tags from summary
-            summary = BeautifulSoup(summary, "html.parser").get_text(separator=" ")[:500]
+            summary = BeautifulSoup(summary, "html.parser").get_text(separator=" ")[:600]
 
             if title and link:
                 articles.append({
@@ -152,10 +210,10 @@ def _fetch_rss(source: dict, cutoff: datetime) -> List[Dict]:
                     "url": link,
                     "summary": summary,
                     "source": source["name"],
-                    "published": pub_date.isoformat() if pub_date else "",
+                    "published": pub_date.isoformat() if pub_date else "unknown",
                 })
 
-        logger.info(f"[{source['name']}] Fetched {len(articles)} articles from RSS.")
+        logger.info(f"[{source['name']}] {len(articles)} articles fetched.")
     except Exception as e:
         logger.warning(f"[{source['name']}] RSS fetch failed: {e}")
 
@@ -167,15 +225,14 @@ def _fetch_html(source: dict, cutoff: datetime) -> List[Dict]:
     articles = []
     try:
         resp = requests.get(source["url"], headers=HEADERS, timeout=10)
-        if resp.status_code == 403:
-            logger.warning(f"[{source['name']}] Blocked (403). Skipping.")
+        if resp.status_code in (403, 429):
+            logger.warning(f"[{source['name']}] Blocked ({resp.status_code}). Skipping.")
             return []
         if resp.status_code != 200:
             logger.warning(f"[{source['name']}] HTTP {resp.status_code}. Skipping.")
             return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        # Generic link extraction: find anchors with a meaningful title
         base = f"{urlparse(source['url']).scheme}://{urlparse(source['url']).netloc}"
         seen = set()
         for a in soup.find_all("a", href=True):
@@ -185,7 +242,7 @@ def _fetch_html(source: dict, cutoff: datetime) -> List[Dict]:
                 continue
             if href.startswith("/"):
                 href = base + href
-            if href in seen:
+            if not href.startswith("http") or href in seen:
                 continue
             seen.add(href)
             articles.append({
@@ -193,9 +250,9 @@ def _fetch_html(source: dict, cutoff: datetime) -> List[Dict]:
                 "url": href,
                 "summary": "",
                 "source": source["name"],
-                "published": "",
+                "published": "unknown",
             })
-        logger.info(f"[{source['name']}] Scraped {len(articles)} candidate links from HTML.")
+        logger.info(f"[{source['name']}] {len(articles)} candidate links scraped.")
     except requests.Timeout:
         logger.warning(f"[{source['name']}] Timeout. Skipping.")
     except Exception as e:
@@ -206,7 +263,7 @@ def _fetch_html(source: dict, cutoff: datetime) -> List[Dict]:
 
 def fetch_all_articles(lookback_days: int = 7) -> List[Dict]:
     """
-    Fetch articles from all configured sources published within the lookback window.
+    Fetch articles from all configured sources within the lookback window.
     Silently skips any source that is unavailable or blocked.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
@@ -230,22 +287,43 @@ def fetch_all_articles(lookback_days: int = 7) -> List[Dict]:
             seen_urls.add(a["url"])
             unique.append(a)
 
-    logger.info(f"Total unique articles fetched across all sources: {len(unique)}")
+    logger.info(f"Total unique articles in pool: {len(unique)}")
     return unique
+
+
+def _get_bank_tokens(bank_name: str) -> List[str]:
+    """
+    Extract meaningful tokens from a bank name for matching.
+    Removes stopwords and short tokens, keeps the most distinctive terms.
+    Returns at least the first significant word.
+    """
+    words = re.sub(r"[&',.\(\)]", " ", bank_name).lower().split()
+    tokens = [w for w in words if w not in BANK_NAME_STOPWORDS and len(w) > 2]
+    # Always keep at least the first word even if it's a stopword
+    if not tokens:
+        tokens = [words[0]] if words else []
+    return tokens
 
 
 def filter_articles_for_banks(articles: List[Dict], banks: List[str]) -> List[Dict]:
     """
-    Filter articles to only those that mention at least one bank in the batch.
-    Uses case-insensitive whole-word matching for precision.
+    Filter articles to only those mentioning at least one bank in the batch.
+
+    Matching strategy:
+    - Extract significant tokens from each bank name (strip stopwords like 'plc', 'ltd')
+    - Match ALL significant tokens present in title OR summary (case-insensitive)
+    - Single-token names (e.g. "Barclays") only need that one token to match
     """
     matched = []
     for article in articles:
         haystack = f"{article['title']} {article['summary']}".lower()
         for bank in banks:
-            # Match the most distinctive part of the bank name (first 2 words)
-            key = " ".join(bank.lower().split()[:2])
-            if key and key in haystack:
+            tokens = _get_bank_tokens(bank)
+            if not tokens:
+                continue
+            # For multi-token banks: ALL significant tokens must be present
+            # For single-token banks: just that token
+            if all(tok in haystack for tok in tokens):
                 matched.append(article)
                 break
     return matched
