@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 # Force UTF-8 stdout (required on Windows for emoji in prompts)
@@ -29,13 +29,10 @@ import yaml
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).parent))
 
-from datetime import date, timedelta
-from pathlib import Path
-
 from prompt_builder import build_prompt, split_into_batches
 from output_formatter import format_briefing
 from gemini_client import call_with_cascade
-import silobreaker_client
+import rss_client
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -93,7 +90,7 @@ def main() -> None:
     lookback_days = cfg.get("lookback_days", 7)
     max_retries = cfg.get("max_retries", 3)
     retry_delay = cfg.get("retry_delay_seconds", 60)
-    inter_batch_delay = cfg.get("inter_batch_delay_seconds", 65)
+    inter_batch_delay = cfg.get("inter_batch_delay_seconds", 15)
     output_dir = REPO_ROOT / cfg.get("output_dir", "briefings")
 
     # ---------------------------------------------------------- reference date
@@ -106,22 +103,11 @@ def main() -> None:
     logger.info(f"Reference date: {reference_date}")
     logger.info(f"Banks to screen: {len(banks)}")
 
-    sb_risk_query = cfg.get("silobreaker_risk_query", "")
-
     # ----------------------------------------------------------- API key check
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    sb_api_key = os.environ.get("SILOBREAKER_API_KEY", "")
-    sb_shared_key = os.environ.get("SILOBREAKER_SHARED_KEY", "")
-    
-    if not args.dry_run:
-        missing_keys = []
-        if not api_key: missing_keys.append("GEMINI_API_KEY")
-        if not sb_api_key: missing_keys.append("SILOBREAKER_API_KEY")
-        if not sb_shared_key: missing_keys.append("SILOBREAKER_SHARED_KEY")
-        
-        if missing_keys:
-            logger.error(f"Missing environment variables: {', '.join(missing_keys)}")
-            sys.exit(1)
+    if not api_key and not args.dry_run:
+        logger.error("GEMINI_API_KEY environment variable is not set.")
+        sys.exit(1)
 
     # --------------------------------------------------------------- batching
     batches = split_into_batches(banks, batch_size)
@@ -129,37 +115,37 @@ def main() -> None:
     logger.info(f"Split into {total_batches} batches of up to {batch_size} banks each.")
     logger.info(f"Inter-batch delay: {inter_batch_delay}s | Retry base delay: {retry_delay}s")
 
-    # Dates for Silobreaker
-    to_date_str = reference_date.strftime("%Y-%m-%d")
-    from_date_str = (reference_date - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    # ------------------------------------------------ Fetch ALL RSS articles once
+    # We do this globally (not per batch) to avoid hammering the news sources 5x.
+    if args.dry_run:
+        logger.info("DRY RUN — Skipping RSS fetch.")
+        all_articles = []
+    else:
+        logger.info(f"Fetching news from RSS/web sources (lookback: {lookback_days} days)...")
+        all_articles = rss_client.fetch_all_articles(lookback_days=lookback_days)
+        logger.info(f"Total articles in pool: {len(all_articles)}")
 
     # ---------------------------------------------------------- per-batch call
     batch_responses: list[str] = []
-    model_used = cfg["models"]["primary"]  # will be updated to actual model used
+    model_used = cfg["models"]["primary"]
 
     for i, batch in enumerate(batches, start=1):
         logger.info(f"Processing batch {i}/{total_batches} ({len(batch)} banks)...")
-        
-        # 1. Fetch from Silobreaker
+
+        # 1. Filter relevant articles for this batch of banks
         if args.dry_run:
-            articles_text = "[DRY RUN — Silobreaker articles would appear here]"
+            articles_text = "[DRY RUN — RSS articles would appear here]"
         else:
-            raw_articles = silobreaker_client.fetch_adverse_news(
-                api_key=sb_api_key,
-                shared_key=sb_shared_key,
-                banks=batch,
-                risk_keywords=sb_risk_query,
-                from_date=from_date_str,
-                to_date=to_date_str
-            )
-            articles_text = silobreaker_client.format_articles_for_prompt(raw_articles)
-            
-            if not raw_articles:
-                logger.info(f"Batch {i} skipped: No adverse news found in Silobreaker.")
+            relevant = rss_client.filter_articles_for_banks(all_articles, batch)
+            articles_text = rss_client.format_articles_for_prompt(relevant)
+            logger.info(f"Batch {i}: {len(relevant)} articles matched for {len(batch)} banks.")
+
+            if not relevant:
+                logger.info(f"Batch {i} skipped — no articles found for these banks.")
                 batch_responses.append(f"> ✅ No adverse news found for batch {i}.")
                 continue
 
-        # 2. Build Prompt
+        # 2. Build prompt with the matched articles
         prompt = build_prompt(
             banks=batch,
             batch_num=i,
@@ -177,7 +163,7 @@ def main() -> None:
             batch_responses.append(f"[DRY RUN — no API call for batch {i}]")
             continue
 
-        # 3. Call Gemini
+        # 3. Call Gemini (pure text analysis — no Search tool)
         try:
             response_text, used_model = call_with_cascade(
                 prompt=prompt,
@@ -185,16 +171,16 @@ def main() -> None:
                 max_retries=max_retries,
                 retry_delay=float(retry_delay),
             )
-            model_used = used_model  # track last model actually used
+            model_used = used_model
             batch_responses.append(response_text)
             logger.info(f"Batch {i} complete. Model used: {used_model}")
         except RuntimeError as e:
             logger.error(f"Batch {i} failed permanently: {e}")
             batch_responses.append(f"[ERROR — batch {i} failed: {e}]")
 
-        # Pause between batches to stay within Gemini RPM quota (skip after last batch)
+        # 4. Rate-limit protection between batches
         if i < total_batches:
-            logger.info(f"Waiting {inter_batch_delay}s before next batch (rate limit protection)...")
+            logger.info(f"Waiting {inter_batch_delay}s before next batch...")
             time.sleep(inter_batch_delay)
 
     # --------------------------------------------------------- format & save
@@ -210,11 +196,9 @@ def main() -> None:
     output_file = output_dir / f"{reference_date.isoformat()}.md"
     raw_output_file = output_dir / f"{reference_date.isoformat()}_raw.md"
 
-    # Save final formatted briefing
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(briefing_md)
 
-    # Save raw batch outputs for debugging
     with open(raw_output_file, "w", encoding="utf-8") as f:
         f.write("\n\n=== BATCH SEPARATOR ===\n\n".join(batch_responses))
 
@@ -224,7 +208,6 @@ def main() -> None:
     if args.dry_run:
         print(f"\n[DRY RUN] Output would be saved to: {output_file}")
 
-    # Output path for GitHub Actions to reference
     print(f"OUTPUT_FILE={output_file}")
 
 
