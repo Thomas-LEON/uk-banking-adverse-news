@@ -7,14 +7,22 @@ models:
   fallback1: "gemini-3.6-flash"
   fallback2: "gemini-3.5-flash"
 
+# Silobreaker query — risk keywords ORed together
+# Broadened to catch all 5 Pillars (regulatory, crime, leadership, ops, financial)
+silobreaker_risk_query: >-
+  (fine OR penalty OR fraud OR lawsuit OR breach OR outage OR downgrade
+  OR investigation OR sanctions OR laundering OR FCA OR PRA OR OFSI
+  OR litigation OR misconduct OR cybersecurity OR ransomware OR hack
+  OR redundancies OR "credit rating" OR insolvency OR administration
+  OR "class action" OR "regulatory action" OR "money laundering"
+  OR "data breach" OR "market abuse")
+
 lookback_days: 7            # Rolling 7-day window
 batch_size: 30              # Banks per Gemini call (131 banks → 5 batches max)
 max_retries: 3              # Retries per model before cascade to next
 
 # Rate limits (all models): RPM=5, TPM=250K, RPD=20
-# 5 RPM = 1 req/12s → 15s inter-batch gives comfortable headroom
-# RPD=20 → 5 batches/run = 4 full runs max/day (weekly job = fine)
 retry_delay_seconds: 15        # Base delay on 429/5xx (backoff: 15s → 30s → 60s)
 inter_batch_delay_seconds: 15  # Pause between batches — safe within 5 RPM
 
-output_dir: "briefings"     # Relative to repo root
+output_dir: "briefings"

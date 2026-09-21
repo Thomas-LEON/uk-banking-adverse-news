@@ -3,6 +3,8 @@ run_briefing.py
 ===============
 Main orchestrator for the UK Banking Adverse News briefing pipeline.
 
+Data source: Silobreaker API (v2) — HMAC-SHA1 authenticated queries.
+
 Usage:
     python src/run_briefing.py                    # Normal run (today)
     python src/run_briefing.py --dry-run          # Print prompts, no API call
@@ -32,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from prompt_builder import build_prompt, split_into_batches
 from output_formatter import format_briefing
 from gemini_client import call_with_cascade
-import rss_client
+import silobreaker_client
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -49,7 +51,7 @@ logger = logging.getLogger("run_briefing")
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
 CONFIG_DIR = REPO_ROOT / "config"
-BANKS_FILE = CONFIG_DIR / "banks.json"
+BANKS_FILE  = CONFIG_DIR / "banks.json"
 SETTINGS_FILE = CONFIG_DIR / "settings.yaml"
 
 
@@ -83,15 +85,16 @@ def main() -> None:
     args = parse_args()
 
     # ------------------------------------------------------------------ config
-    cfg = load_config()
+    cfg   = load_config()
     banks = load_banks()
 
-    batch_size = cfg.get("batch_size", 30)
-    lookback_days = cfg.get("lookback_days", 7)
-    max_retries = cfg.get("max_retries", 3)
-    retry_delay = cfg.get("retry_delay_seconds", 60)
-    inter_batch_delay = cfg.get("inter_batch_delay_seconds", 15)
-    output_dir = REPO_ROOT / cfg.get("output_dir", "briefings")
+    batch_size         = cfg.get("batch_size", 30)
+    lookback_days      = cfg.get("lookback_days", 7)
+    max_retries        = cfg.get("max_retries", 3)
+    retry_delay        = cfg.get("retry_delay_seconds", 15)
+    inter_batch_delay  = cfg.get("inter_batch_delay_seconds", 15)
+    output_dir         = REPO_ROOT / cfg.get("output_dir", "briefings")
+    sb_risk_query      = cfg.get("silobreaker_risk_query", "")
 
     # ---------------------------------------------------------- reference date
     if args.date:
@@ -100,30 +103,33 @@ def main() -> None:
         env_date = os.environ.get("DATE_OVERRIDE", "").strip()
         reference_date = date.fromisoformat(env_date) if env_date else date.today()
 
+    to_date_str   = reference_date.strftime("%Y-%m-%d")
+    from_date_str = (reference_date - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
     logger.info(f"Reference date: {reference_date}")
+    logger.info(f"Date window: {from_date_str} → {to_date_str}")
     logger.info(f"Banks to screen: {len(banks)}")
 
     # ----------------------------------------------------------- API key check
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key and not args.dry_run:
-        logger.error("GEMINI_API_KEY environment variable is not set.")
-        sys.exit(1)
+    api_key       = os.environ.get("GEMINI_API_KEY", "")
+    sb_api_key    = os.environ.get("SILOBREAKER_API_KEY", "")
+    sb_shared_key = os.environ.get("SILOBREAKER_SHARED_KEY", "")
+
+    if not args.dry_run:
+        missing = [k for k, v in {
+            "GEMINI_API_KEY": api_key,
+            "SILOBREAKER_API_KEY": sb_api_key,
+            "SILOBREAKER_SHARED_KEY": sb_shared_key,
+        }.items() if not v]
+        if missing:
+            logger.error(f"Missing environment variables: {', '.join(missing)}")
+            sys.exit(1)
 
     # --------------------------------------------------------------- batching
-    batches = split_into_batches(banks, batch_size)
+    batches       = split_into_batches(banks, batch_size)
     total_batches = len(batches)
     logger.info(f"Split into {total_batches} batches of up to {batch_size} banks each.")
     logger.info(f"Inter-batch delay: {inter_batch_delay}s | Retry base delay: {retry_delay}s")
-
-    # ------------------------------------------------ Fetch ALL RSS articles once
-    # We do this globally (not per batch) to avoid hammering the news sources 5x.
-    if args.dry_run:
-        logger.info("DRY RUN — Skipping RSS fetch.")
-        all_articles = []
-    else:
-        logger.info(f"Fetching news from RSS/web sources (lookback: {lookback_days} days)...")
-        all_articles = rss_client.fetch_all_articles(lookback_days=lookback_days)
-        logger.info(f"Total articles in pool: {len(all_articles)}")
 
     # ---------------------------------------------------------- per-batch call
     batch_responses: list[str] = []
@@ -132,16 +138,23 @@ def main() -> None:
     for i, batch in enumerate(batches, start=1):
         logger.info(f"Processing batch {i}/{total_batches} ({len(batch)} banks)...")
 
-        # 1. Filter relevant articles for this batch of banks
+        # 1. Fetch articles from Silobreaker for this batch
         if args.dry_run:
-            articles_text = "[DRY RUN — RSS articles would appear here]"
+            articles_text = "[DRY RUN — Silobreaker articles would appear here]"
         else:
-            relevant = rss_client.filter_articles_for_banks(all_articles, batch)
-            articles_text = rss_client.format_articles_for_prompt(relevant)
-            logger.info(f"Batch {i}: {len(relevant)} articles matched for {len(batch)} banks.")
+            raw_articles = silobreaker_client.fetch_adverse_news(
+                api_key=sb_api_key,
+                shared_key=sb_shared_key,
+                banks=batch,
+                risk_keywords=sb_risk_query,
+                from_date=from_date_str,
+                to_date=to_date_str,
+            )
+            articles_text = silobreaker_client.format_articles_for_prompt(raw_articles)
+            logger.info(f"Batch {i}: {len(raw_articles)} articles from Silobreaker.")
 
-            if not relevant:
-                logger.info(f"Batch {i} skipped — no articles found for these banks.")
+            if not raw_articles:
+                logger.info(f"Batch {i} skipped — no articles found in Silobreaker.")
                 batch_responses.append(f"> ✅ No adverse news found for batch {i}.")
                 continue
 
@@ -163,7 +176,7 @@ def main() -> None:
             batch_responses.append(f"[DRY RUN — no API call for batch {i}]")
             continue
 
-        # 3. Call Gemini (pure text analysis — no Search tool)
+        # 3. Call Gemini (pure text analysis — no Search tool, temperature=0)
         try:
             response_text, used_model = call_with_cascade(
                 prompt=prompt,
@@ -178,7 +191,7 @@ def main() -> None:
             logger.error(f"Batch {i} failed permanently: {e}")
             batch_responses.append(f"[ERROR — batch {i} failed: {e}]")
 
-        # 4. Rate-limit protection between batches
+        # 4. Rate-limit protection between batches (5 RPM limit)
         if i < total_batches:
             logger.info(f"Waiting {inter_batch_delay}s before next batch...")
             time.sleep(inter_batch_delay)
@@ -193,7 +206,7 @@ def main() -> None:
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{reference_date.isoformat()}.md"
+    output_file     = output_dir / f"{reference_date.isoformat()}.md"
     raw_output_file = output_dir / f"{reference_date.isoformat()}_raw.md"
 
     with open(output_file, "w", encoding="utf-8") as f:
@@ -208,6 +221,7 @@ def main() -> None:
     if args.dry_run:
         print(f"\n[DRY RUN] Output would be saved to: {output_file}")
 
+    # Output path for GitHub Actions commit step
     print(f"OUTPUT_FILE={output_file}")
 
 
